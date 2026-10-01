@@ -58,76 +58,46 @@ describe('resolveFolderPath', () => {
   });
 
   describe('custom folders', () => {
-    test('should resolve custom folder by ID when found', async () => {
-      const customFolderId = 'custom-folder-id-123';
-      const customFolderName = 'MyCustomFolder';
+    const tree = {
+      'me/mailFolders': [
+        { id: 'inbox-id', displayName: 'Inbox', childFolderCount: 2 },
+        { id: 'archive-id', displayName: 'Archive', childFolderCount: 1 }
+      ],
+      'me/mailFolders/inbox-id/childFolders': [
+        { id: 'proj-id', displayName: 'ProjectAlpha', childFolderCount: 0 },
+        { id: 'dup-inbox-id', displayName: 'Dup', childFolderCount: 0 }
+      ],
+      'me/mailFolders/archive-id/childFolders': [
+        { id: 'dup-archive-id', displayName: 'Dup', childFolderCount: 0 }
+      ]
+    };
 
-      callGraphAPI.mockResolvedValueOnce({
-        value: [{ id: customFolderId, displayName: customFolderName }]
-      });
-
-      const result = await resolveFolderPath(mockAccessToken, customFolderName);
-
-      expect(result).toBe(`me/mailFolders/${customFolderId}/messages`);
-      expect(callGraphAPI).toHaveBeenCalledWith(
-        mockAccessToken,
-        'GET',
-        'me/mailFolders',
-        null,
-        { $filter: `displayName eq '${customFolderName}'` }
-      );
+    beforeEach(() => {
+      callGraphAPI.mockImplementation(async (token, method, endpoint) => ({ value: tree[endpoint] || [] }));
     });
 
-    test('should try case-insensitive search when exact match fails', async () => {
-      const customFolderId = 'custom-folder-id-456';
-      const customFolderName = 'ProjectAlpha';
-
-      // First call returns empty (exact match fails)
-      callGraphAPI.mockResolvedValueOnce({ value: [] });
-
-      // Second call returns all folders for case-insensitive match
-      callGraphAPI.mockResolvedValueOnce({
-        value: [
-          { id: 'other-id', displayName: 'OtherFolder' },
-          { id: customFolderId, displayName: 'projectalpha' }
-        ]
-      });
-
-      const result = await resolveFolderPath(mockAccessToken, customFolderName);
-
-      expect(result).toBe(`me/mailFolders/${customFolderId}/messages`);
-      expect(callGraphAPI).toHaveBeenCalledTimes(2);
+    test('should resolve a nested folder by display name (case-insensitive)', async () => {
+      const result = await resolveFolderPath(mockAccessToken, 'projectalpha');
+      expect(result).toBe('me/mailFolders/proj-id/messages');
     });
 
-    test('should fall back to inbox when custom folder is not found', async () => {
-      const nonExistentFolder = 'NonExistentFolder';
-
-      // First call returns empty (exact match fails)
-      callGraphAPI.mockResolvedValueOnce({ value: [] });
-
-      // Second call returns folders without a match
-      callGraphAPI.mockResolvedValueOnce({
-        value: [
-          { id: 'id1', displayName: 'Folder1' },
-          { id: 'id2', displayName: 'Folder2' }
-        ]
-      });
-
-      const result = await resolveFolderPath(mockAccessToken, nonExistentFolder);
-
-      expect(result).toBe(WELL_KNOWN_FOLDERS['inbox']);
-      expect(callGraphAPI).toHaveBeenCalledTimes(2);
+    test('should resolve a nested folder by full path', async () => {
+      const result = await resolveFolderPath(mockAccessToken, 'Archive/Dup');
+      expect(result).toBe('me/mailFolders/dup-archive-id/messages');
     });
 
-    test('should fall back to inbox when API call fails', async () => {
-      const customFolderName = 'CustomFolder';
+    test('should throw when folder is not found instead of falling back to inbox', async () => {
+      await expect(resolveFolderPath(mockAccessToken, 'NonExistentFolder')).rejects.toThrow('Folder not found');
+    });
 
+    test('should throw when a display name is ambiguous', async () => {
+      await expect(resolveFolderPath(mockAccessToken, 'Dup')).rejects.toThrow('ambiguous');
+    });
+
+    test('should propagate API errors', async () => {
+      callGraphAPI.mockReset();
       callGraphAPI.mockRejectedValueOnce(new Error('API Error'));
-
-      const result = await resolveFolderPath(mockAccessToken, customFolderName);
-
-      expect(result).toBe(WELL_KNOWN_FOLDERS['inbox']);
-      expect(callGraphAPI).toHaveBeenCalledTimes(1);
+      await expect(resolveFolderPath(mockAccessToken, 'CustomFolder')).rejects.toThrow('API Error');
     });
   });
 });
@@ -136,81 +106,28 @@ describe('getFolderIdByName', () => {
   const mockAccessToken = 'dummy_access_token';
 
   beforeEach(() => {
-    callGraphAPI.mockClear();
+    callGraphAPI.mockReset();
     jest.spyOn(console, 'error').mockImplementation(() => {});
+    callGraphAPI.mockImplementation(async (token, method, endpoint) => ({
+      value: endpoint === 'me/mailFolders'
+        ? [{ id: 'parent-id', displayName: 'Parent', childFolderCount: 1 }]
+        : [{ id: 'child-id', displayName: 'TestFolder', childFolderCount: 0 }]
+    }));
   });
 
   afterEach(() => {
     console.error.mockRestore();
   });
 
-  test('should return folder ID when exact match is found', async () => {
-    const folderId = 'folder-id-123';
-    const folderName = 'TestFolder';
-
-    callGraphAPI.mockResolvedValueOnce({
-      value: [{ id: folderId, displayName: folderName }]
-    });
-
-    const result = await getFolderIdByName(mockAccessToken, folderName);
-
-    expect(result).toBe(folderId);
-    expect(callGraphAPI).toHaveBeenCalledWith(
-      mockAccessToken,
-      'GET',
-      'me/mailFolders',
-      null,
-      { $filter: `displayName eq '${folderName}'` }
-    );
+  test('should return nested folder ID by name', async () => {
+    expect(await getFolderIdByName(mockAccessToken, 'testfolder')).toBe('child-id');
   });
 
-  test('should return folder ID when case-insensitive match is found', async () => {
-    const folderId = 'folder-id-456';
-    const folderName = 'TestFolder';
-
-    // First call returns empty (exact match fails)
-    callGraphAPI.mockResolvedValueOnce({ value: [] });
-
-    // Second call returns folders with case-insensitive match
-    callGraphAPI.mockResolvedValueOnce({
-      value: [
-        { id: folderId, displayName: 'testfolder' }
-      ]
-    });
-
-    const result = await getFolderIdByName(mockAccessToken, folderName);
-
-    expect(result).toBe(folderId);
-    expect(callGraphAPI).toHaveBeenCalledTimes(2);
+  test('should return nested folder ID by path', async () => {
+    expect(await getFolderIdByName(mockAccessToken, 'Parent/TestFolder')).toBe('child-id');
   });
 
   test('should return null when folder is not found', async () => {
-    const folderName = 'NonExistentFolder';
-
-    // First call returns empty
-    callGraphAPI.mockResolvedValueOnce({ value: [] });
-
-    // Second call returns folders without a match
-    callGraphAPI.mockResolvedValueOnce({
-      value: [
-        { id: 'id1', displayName: 'OtherFolder' }
-      ]
-    });
-
-    const result = await getFolderIdByName(mockAccessToken, folderName);
-
-    expect(result).toBeNull();
-    expect(callGraphAPI).toHaveBeenCalledTimes(2);
-  });
-
-  test('should return null when API call fails', async () => {
-    const folderName = 'TestFolder';
-
-    callGraphAPI.mockRejectedValueOnce(new Error('API Error'));
-
-    const result = await getFolderIdByName(mockAccessToken, folderName);
-
-    expect(result).toBeNull();
-    expect(callGraphAPI).toHaveBeenCalledTimes(1);
+    expect(await getFolderIdByName(mockAccessToken, 'NonExistentFolder')).toBeNull();
   });
 });

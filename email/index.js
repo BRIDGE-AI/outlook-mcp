@@ -19,7 +19,7 @@ const emailTools = [
       properties: {
         folder: {
           type: "string",
-          description: "Email folder to list (e.g., 'inbox', 'sent', 'drafts', default: 'inbox')"
+          description: "Email folder to list (e.g., 'inbox', 'sent', 'drafts', 'all', or a nested path like 'Inbox/Project'; default: 'inbox'). Unknown folder returns an error"
         },
         count: {
           type: "number",
@@ -42,7 +42,7 @@ const emailTools = [
         },
         folder: {
           type: "string",
-          description: "Email folder to search in (default: 'inbox')"
+          description: "Email folder to search in (default: 'all' = every folder including subfolders). Accepts well-known names ('inbox', 'sent', 'deleted', 'archive'), a folder name, or a nested path like 'Inbox/Project'. Unknown folder returns an error"
         },
         from: {
           type: "string",
